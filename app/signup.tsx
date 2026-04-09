@@ -60,7 +60,7 @@ const [usernameStatus, setUsernameStatus] = useState<"idle" | "checking" | "take
     const delay = setTimeout(async () => {
       setUsernameStatus("checking");
       try {
-        const res = await axios.get(`http://192.168.1.7:5000/api/check-username/${username}`);
+        const res = await axios.get(`http://192.168.1.4:5000/api/check-username/${username}`);
         setUsernameStatus(res.data.available ? "available" : "taken");
       } catch {
         setUsernameStatus("idle");
@@ -87,7 +87,7 @@ const [usernameStatus, setUsernameStatus] = useState<"idle" | "checking" | "take
     setLoading(true);
   
     try {
-      await axios.post("http://192.168.1.8:5000/api/signup", {
+      await axios.post("http://192.168.1.4:5000/api/signup", {
         username,
         matricNo,
         email,
@@ -96,7 +96,7 @@ const [usernameStatus, setUsernameStatus] = useState<"idle" | "checking" | "take
       });
   
       // 🔥 AUTO LOGIN AFTER SIGNUP
-      const loginRes = await axios.post("http://192.168.1.8:5000/api/login", {
+      const loginRes = await axios.post("http://192.168.1.4:5000/api/login", {
         identifier: username,
         password,
       });

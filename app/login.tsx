@@ -70,7 +70,7 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const res = await axios.post<LoginResponse>("http://192.168.1.8:5000/api/login", {
+      const res = await axios.post<LoginResponse>("http://192.168.1.4:5000/api/login", {
         identifier,
         password,
         portalRole: roleValue || "student", // 🔥 Tell the server which portal they are at
