@@ -17,7 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
-
+import { BASE_URL } from "../utils/config"; // ✅ single source of truth
 
 type LoginResponse = {
   message: string;
@@ -27,6 +27,8 @@ type LoginResponse = {
     username: string;
     email: string;
     matricNo: string;
+    department: string;
+    level: string;
   };
 };
 
@@ -37,27 +39,18 @@ export default function Login() {
   const roleValue = Array.isArray(role) ? role[0] : role;
 
   const [identifier, setIdentifier] = useState("");
-  const [password, setPassword] = useState("");
-  const [secure, setSecure] = useState(true);
-  const [loading, setLoading] = useState(false);
+  const [password, setPassword]     = useState("");
+  const [secure, setSecure]         = useState(true);
+  const [loading, setLoading]       = useState(false);
+  const [error, setError]           = useState("");
 
-  const fade = useRef(new Animated.Value(0)).current;
+  const fade  = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(0.95)).current;
-
-  const [error, setError] = useState("");
-
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fade, {
-        toValue: 1,
-        duration: 800,
-        useNativeDriver: true,
-      }),
-      Animated.spring(scale, {
-        toValue: 1,
-        useNativeDriver: true,
-      }),
+      Animated.timing(fade, { toValue: 1, duration: 800, useNativeDriver: true }),
+      Animated.spring(scale, { toValue: 1, useNativeDriver: true }),
     ]).start();
   }, []);
 
@@ -66,21 +59,24 @@ export default function Login() {
       setError("Please fill all fields");
       return;
     }
-
     setLoading(true);
-
+    setError("");
     try {
-      const res = await axios.post<LoginResponse>("http://192.168.1.4:5000/api/login", {
+      const res = await axios.post<LoginResponse>(`${BASE_URL}/api/login`, { // ✅
         identifier,
         password,
-        portalRole: roleValue || "student", // 🔥 Tell the server which portal they are at
+        portalRole: roleValue || "student",
       });
 
-      await AsyncStorage.setItem("token", res.data.token);
-      await AsyncStorage.setItem("role", res.data.role);
-      await AsyncStorage.setItem("username", res.data.user.username);
-      await AsyncStorage.setItem("email", res.data.user.email);
-      await AsyncStorage.setItem("matricNo", res.data.user.matricNo);
+      await AsyncStorage.multiSet([
+        ["token",      res.data.token],
+        ["role",       res.data.role],
+        ["username",   res.data.user.username],
+        ["email",      res.data.user.email],
+        ["matricNo",   res.data.user.matricNo],
+        ["department", res.data.user.department ?? ""],
+        ["level",      res.data.user.level ?? ""],
+      ]);
 
       router.replace("/(tabs)");
     } catch (err: any) {
@@ -138,7 +134,11 @@ export default function Login() {
               )}
             </Pressable>
 
-            <Pressable onPress={() => router.push({ pathname: "/signup", params: { role: roleValue || "student" } } as any)}>
+            <Pressable
+              onPress={() =>
+                router.push({ pathname: "/signup", params: { role: roleValue || "student" } } as any)
+              }
+            >
               <Text style={styles.link}>Don&apos;t have an account? Sign up</Text>
             </Pressable>
 
@@ -153,12 +153,12 @@ export default function Login() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#EAF5F1" },
+  safe:      { flex: 1, backgroundColor: "#EAF5F1" },
   container: { flex: 1, justifyContent: "center", padding: 20 },
-  cardWrap: { alignItems: "center" },
-  card: { width: "100%", borderRadius: 24, padding: 22 },
-  title: { fontSize: 26, fontWeight: "900", textAlign: "center" },
-  subtitle: { textAlign: "center", marginBottom: 20 },
+  cardWrap:  { alignItems: "center" },
+  card:      { width: "100%", borderRadius: 24, padding: 22 },
+  title:     { fontSize: 26, fontWeight: "900", textAlign: "center" },
+  subtitle:  { textAlign: "center", marginBottom: 20 },
   inputWrap: {
     flexDirection: "row",
     alignItems: "center",
@@ -167,33 +167,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     marginBottom: 12,
   },
-  input: { flex: 1, paddingVertical: 12, marginLeft: 8 },
-  button: {
-    backgroundColor: "#0B6E4F",
-    padding: 15,
-    borderRadius: 12,
-    alignItems: "center",
-  },
+  input:      { flex: 1, paddingVertical: 12, marginLeft: 8 },
+  button:     { backgroundColor: "#0B6E4F", padding: 15, borderRadius: 12, alignItems: "center" },
   buttonText: { color: "#fff", fontWeight: "800" },
-  link: {
-    textAlign: "center",
-    marginTop: 15,
-    color: "#1E3A8A",
-    fontWeight: "600",
-  },
-  error: {
-    color: "red",
-    marginBottom: 10,
-    fontSize: 13,
-  },
-  success: {
-    color: "green",
-    marginBottom: 10,
-    fontSize: 13,
-  },
-  info: {
-    color: "#555",
-    marginBottom: 10,
-    fontSize: 13,
-  },
+  link:       { textAlign: "center", marginTop: 15, color: "#1E3A8A", fontWeight: "600" },
+  error:      { color: "red", marginBottom: 10, fontSize: 13 },
 });
