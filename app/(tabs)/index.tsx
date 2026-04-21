@@ -17,7 +17,7 @@ import SettingsScreen from "../../screens/SettingsScreen";
 export default function App() {
   const [activeBottomTab, setActiveBottomTab] = useState<
     "Home" | "Courses" | "Schedule" | "Community" | "Profile"
-  >("Profile");
+  >("Home");
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
@@ -25,7 +25,12 @@ export default function App() {
 
   if (showSettings) {
     return (
-      <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
+      // ✅ edges={["top"]} — only apply safe area on top, not bottom
+      // This prevents the extra gap below the settings screen too
+      <SafeAreaView
+        edges={["top"]}
+        style={[styles.safeArea, { backgroundColor: theme.background }]}
+      >
         <SettingsScreen
           onBack={() => setShowSettings(false)}
           isDarkMode={isDarkMode}
@@ -37,15 +42,23 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
+    // ✅ THE FIX: edges={["top"]} tells SafeAreaView to ONLY add padding at
+    // the top (for the notch/status bar). It no longer adds any padding at
+    // the bottom, so the gap below the tab bar disappears completely.
+    // The tab bar itself handles its own bottom spacing via the input bar
+    // insets in each screen that needs it (like CommunityScreen).
+    <SafeAreaView
+      edges={["top"]}
+      style={[styles.safeArea, { backgroundColor: theme.background }]}
+    >
       <View style={[styles.container, { backgroundColor: theme.background }]}>
         {activeBottomTab === "Home" && (
-       <HomeScreen theme={theme} isDarkMode={isDarkMode} />
+          <HomeScreen theme={theme} isDarkMode={isDarkMode} />
         )}
-        {activeBottomTab === "Courses" && <CoursesScreen theme={theme} />}
-        {activeBottomTab === "Schedule" && <ScheduleScreen theme={theme} />}
+        {activeBottomTab === "Courses"   && <CoursesScreen theme={theme} />}
+        {activeBottomTab === "Schedule"  && <ScheduleScreen theme={theme} />}
         {activeBottomTab === "Community" && <CommunityScreen theme={theme} />}
-        {activeBottomTab === "Profile" && (
+        {activeBottomTab === "Profile"   && (
           <ProfileScreen theme={theme} setShowSettings={setShowSettings} />
         )}
 
@@ -80,7 +93,3 @@ export default function App() {
     </SafeAreaView>
   );
 }
-
-
-
-

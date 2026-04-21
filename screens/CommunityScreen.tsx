@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   View, Text, KeyboardAvoidingView, Platform, FlatList,
   Pressable, TextInput, ActivityIndicator, StyleSheet,
-  Image, Modal, Alert,
+  Image, Modal, Alert, TouchableOpacity,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -21,7 +21,7 @@ type PollOption = { text: string; votes: string[] };
 type ChatMessage = {
   _id:       string;
   sender:    string;
-  type?:     "text" | "image" | "document" | "poll"; // ✅ optional — old messages have no type
+  type?:     "text" | "image" | "document" | "poll";
   text:      string;
   imageData?: string;
   fileName?:  string;
@@ -31,8 +31,6 @@ type ChatMessage = {
   createdAt:  string;
   isSystem:   boolean;
 };
-
-// ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 const abbreviateForHeader = (dept: string, level: string) => {
   if (!dept) return `${level} Level`;
@@ -54,32 +52,27 @@ const formatDateLabel = (iso: string): string => {
 
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
-// ─── COMPONENT ────────────────────────────────────────────────────────────────
-
 export default function CommunityScreen({ theme }: StandardProps) {
   const insets = useSafeAreaInsets();
 
-  const [messages, setMessages]           = useState<ChatMessage[]>([]);
-  const [text, setText]                   = useState("");
-  const [username, setUsername]           = useState("");
-  const [room, setRoom]                   = useState("");
-  const [headerLabel, setHeaderLabel]     = useState("Community");
-  const [memberCount, setMemberCount]     = useState<number | null>(null);
+  const [messages, setMessages]             = useState<ChatMessage[]>([]);
+  const [text, setText]                     = useState("");
+  const [username, setUsername]             = useState("");
+  const [room, setRoom]                     = useState("");
+  const [headerLabel, setHeaderLabel]       = useState("Community");
+  const [memberCount, setMemberCount]       = useState<number | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [reactionTarget, setReactionTarget] = useState<string | null>(null);
-
-  // Attachment panel
   const [showAttachPanel, setShowAttachPanel] = useState(false);
+  const [showPollModal, setShowPollModal]   = useState(false);
+  const [pollQuestion, setPollQuestion]     = useState("");
+  const [pollOptions, setPollOptions]       = useState(["", ""]);
 
-  // Poll modal
-  const [showPollModal, setShowPollModal] = useState(false);
-  const [pollQuestion, setPollQuestion]   = useState("");
-  const [pollOptions, setPollOptions]     = useState(["", ""]);
+  const socketRef     = useRef<Socket | null>(null);
+  const flatListRef   = useRef<FlatList>(null);
+  // ✅ Guard flag — prevents picker from being called twice if user taps fast
+  const isPickingRef  = useRef(false);
 
-  const socketRef   = useRef<Socket | null>(null);
-  const flatListRef = useRef<FlatList>(null);
-
-  // ── INIT ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     const init = async () => {
       try {
@@ -103,18 +96,12 @@ export default function CommunityScreen({ theme }: StandardProps) {
         socketRef.current = socket;
 
         socket.on("connect", () => socket.emit("join-room", roomName));
-
         socket.on("receive-message", (msg: ChatMessage) => {
-          setMessages((prev) => {
-            if (prev.some((m) => m._id === msg._id)) return prev;
-            return [...prev, msg];
-          });
+          setMessages((prev) => prev.some((m) => m._id === msg._id) ? prev : [...prev, msg]);
         });
-
         socket.on("reaction-updated", ({ messageId, reactions }) => {
           setMessages((prev) => prev.map((m) => m._id === messageId ? { ...m, reactions } : m));
         });
-
         socket.on("poll-updated", (updated: ChatMessage) => {
           setMessages((prev) => prev.map((m) => m._id === updated._id ? updated : m));
         });
@@ -145,58 +132,113 @@ export default function CommunityScreen({ theme }: StandardProps) {
   };
 
   useEffect(() => {
-    if (messages.length > 0) {
+    if (messages.length > 0)
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-    }
   }, [messages.length]);
 
-  // ── SEND TEXT ───────────────────────────────────────────────────────────────
   const handleSend = useCallback(() => {
     if (!text.trim() || !room || !socketRef.current) return;
     socketRef.current.emit("send-message", { room, sender: username, text: text.trim() });
     setText("");
   }, [text, room, username]);
 
-  // ── SEND IMAGE ──────────────────────────────────────────────────────────────
-  const handlePickImage = async () => {
+  // ── CLOSE PANEL THEN RUN ACTION ─────────────────────────────────────────────
+  // ✅ KEY FIX: Close the modal first, wait for animation to fully finish (500ms),
+  // THEN open the system picker. This prevents the "picking in progress" conflict.
+  const closeAndRun = (action: () => void) => {
     setShowAttachPanel(false);
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert("Permission needed", "Allow photo library access to share images.");
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-      quality: 0.5,
-      base64: true,
-    });
-    if (!result.canceled && result.assets[0]?.base64) {
-      socketRef.current?.emit("send-image", {
-        room, sender: username,
-        imageData: `data:image/jpeg;base64,${result.assets[0].base64}`,
-      });
-    }
+    setTimeout(action, 500);
   };
 
-  // ── SEND DOCUMENT ───────────────────────────────────────────────────────────
-  const handlePickDocument = async () => {
-    setShowAttachPanel(false);
-    try {
-      const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: false });
-      if (!result.canceled && result.assets[0]) {
-        const asset  = result.assets[0];
-        const sizeKB = asset.size ? `${(asset.size / 1024).toFixed(1)} KB` : "";
-        socketRef.current?.emit("send-document", {
-          room, sender: username,
-          fileName: asset.name,
-          fileSize: sizeKB,
+  // ── PHOTO LIBRARY ───────────────────────────────────────────────────────────
+  const handlePickImage = () => {
+    closeAndRun(async () => {
+      if (isPickingRef.current) return;
+      isPickingRef.current = true;
+      try {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert("Permission needed", "Allow photo library access to share images.");
+          return;
+        }
+        const result = await ImagePicker.launchImageLibraryAsync({
+          allowsEditing: false,
+          quality: 0.5,
+          base64: true,
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
         });
+        if (!result.canceled && result.assets?.[0]?.base64) {
+          socketRef.current?.emit("send-image", {
+            room, sender: username,
+            imageData: `data:image/jpeg;base64,${result.assets[0].base64}`,
+          });
+        }
+      } finally {
+        isPickingRef.current = false;
       }
-    } catch { Alert.alert("Error", "Could not open document picker"); }
+    });
   };
 
-  // ── SEND POLL ───────────────────────────────────────────────────────────────
+  // ── CAMERA ──────────────────────────────────────────────────────────────────
+  const handleCamera = () => {
+    closeAndRun(async () => {
+      if (isPickingRef.current) return;
+      isPickingRef.current = true;
+      try {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert("Permission needed", "Allow camera access to take photos.");
+          return;
+        }
+        const result = await ImagePicker.launchCameraAsync({
+          quality: 0.5,
+          base64: true,
+        });
+        if (!result.canceled && result.assets?.[0]?.base64) {
+          socketRef.current?.emit("send-image", {
+            room, sender: username,
+            imageData: `data:image/jpeg;base64,${result.assets[0].base64}`,
+          });
+        }
+      } finally {
+        isPickingRef.current = false;
+      }
+    });
+  };
+
+  // ── DOCUMENT ────────────────────────────────────────────────────────────────
+  const handlePickDocument = () => {
+    closeAndRun(async () => {
+      if (isPickingRef.current) return;
+      isPickingRef.current = true;
+      try {
+        const result = await DocumentPicker.getDocumentAsync({
+          type: "*/*",
+          copyToCacheDirectory: true,
+        });
+        if (!result.canceled && result.assets?.[0]) {
+          const asset  = result.assets[0];
+          const sizeKB = asset.size ? `${(asset.size / 1024).toFixed(1)} KB` : "";
+          socketRef.current?.emit("send-document", {
+            room, sender: username,
+            fileName: asset.name,
+            fileSize: sizeKB,
+          });
+        }
+      } catch (err) {
+        console.error("Document picker error:", err);
+      } finally {
+        isPickingRef.current = false;
+      }
+    });
+  };
+
+  // ── POLL ────────────────────────────────────────────────────────────────────
+  const openPoll = () => {
+    setShowAttachPanel(false);
+    setTimeout(() => setShowPollModal(true), 400);
+  };
+
   const handleSendPoll = () => {
     const valid = pollOptions.filter((o) => o.trim());
     if (!pollQuestion.trim() || valid.length < 2) {
@@ -222,7 +264,7 @@ export default function CommunityScreen({ theme }: StandardProps) {
     setReactionTarget(null);
   };
 
-  // ── LIST DATA with date separators ──────────────────────────────────────────
+  // ── LIST DATA ───────────────────────────────────────────────────────────────
   type SepItem = { type: "separator"; label: string; key: string };
   type MsgItem = { type: "message"; data: ChatMessage };
   type ListItem = SepItem | MsgItem;
@@ -252,8 +294,9 @@ export default function CommunityScreen({ theme }: StandardProps) {
       );
     }
 
-    const msg  = item.data;
-    const isMe = msg.sender === username;
+    const msg     = item.data;
+    const isMe    = msg.sender === username;
+    const msgType = msg.type || "text";
 
     if (msg.isSystem) {
       return (
@@ -262,9 +305,6 @@ export default function CommunityScreen({ theme }: StandardProps) {
         </View>
       );
     }
-
-    // ✅ FIX: treat missing/null/undefined type as "text"
-    const msgType = msg.type || "text";
 
     return (
       <View style={[S.row, isMe ? S.rowMe : S.rowOther]}>
@@ -291,20 +331,14 @@ export default function CommunityScreen({ theme }: StandardProps) {
                 ? { backgroundColor: theme.primary, borderBottomRightRadius: 4 }
                 : { backgroundColor: theme.card, borderBottomLeftRadius: 4, borderWidth: 1, borderColor: theme.border },
             ]}>
-
-              {/* ✅ TEXT — also catches old messages with no type */}
               {msgType === "text" && (
-                <Text style={[S.msgText, { color: isMe ? "#fff" : theme.text }]}>
-                  {msg.text}
-                </Text>
+                <Text style={[S.msgText, { color: isMe ? "#fff" : theme.text }]}>{msg.text}</Text>
               )}
 
-              {/* IMAGE */}
               {msgType === "image" && msg.imageData ? (
                 <Image source={{ uri: msg.imageData }} style={S.imgMsg} resizeMode="cover" />
               ) : null}
 
-              {/* DOCUMENT */}
               {msgType === "document" && (
                 <View style={S.docRow}>
                   <View style={[S.docIconBox, { backgroundColor: isMe ? "rgba(255,255,255,0.2)" : theme.background }]}>
@@ -321,7 +355,6 @@ export default function CommunityScreen({ theme }: StandardProps) {
                 </View>
               )}
 
-              {/* POLL */}
               {msgType === "poll" && msg.poll && (
                 <View style={S.pollWrap}>
                   <Text style={[S.pollQ, { color: isMe ? "#fff" : theme.text }]}>
@@ -342,10 +375,7 @@ export default function CommunityScreen({ theme }: StandardProps) {
                             : "transparent",
                         }]}
                       >
-                        <View style={[S.pollBar, {
-                          width: `${pct}%`,
-                          backgroundColor: isMe ? "rgba(255,255,255,0.12)" : theme.primary + "12",
-                        }]} />
+                        <View style={[S.pollBar, { width: `${pct}%`, backgroundColor: isMe ? "rgba(255,255,255,0.12)" : theme.primary + "12" }]} />
                         <Text style={[S.pollOptText, { color: isMe ? "#fff" : theme.text }]}>
                           {hasVoted ? "✓  " : ""}{opt.text}
                         </Text>
@@ -367,11 +397,9 @@ export default function CommunityScreen({ theme }: StandardProps) {
             </View>
           </Pressable>
 
-          {/* Emoji reaction picker */}
           {reactionTarget === msg._id && (
             <View style={[S.emojiPicker, {
-              backgroundColor: theme.card,
-              borderColor: theme.border,
+              backgroundColor: theme.card, borderColor: theme.border,
               alignSelf: isMe ? "flex-end" : "flex-start",
             }]}>
               {REACTION_EMOJIS.map((e) => (
@@ -382,7 +410,6 @@ export default function CommunityScreen({ theme }: StandardProps) {
             </View>
           )}
 
-          {/* Reaction chips */}
           {msg.reactions?.filter((r) => r.users.length > 0).length > 0 && (
             <View style={[S.reactRow, isMe && { justifyContent: "flex-end" }]}>
               {msg.reactions.filter((r) => r.users.length > 0).map((r) => (
@@ -405,7 +432,6 @@ export default function CommunityScreen({ theme }: StandardProps) {
     );
   };
 
-  // ─────────────────────────────────────────────────────────────────────────────
   return (
     <KeyboardAvoidingView
       style={[styles.screenContainer, { backgroundColor: theme.background }]}
@@ -424,7 +450,6 @@ export default function CommunityScreen({ theme }: StandardProps) {
         <Ionicons name="search-outline" size={24} color={theme.subtext} />
       </View>
 
-      {/* MESSAGES */}
       {loadingHistory ? (
         <View style={S.center}><ActivityIndicator size="large" color={theme.primary} /></View>
       ) : (
@@ -473,63 +498,71 @@ export default function CommunityScreen({ theme }: StandardProps) {
         </Pressable>
       </View>
 
-      {/* ── ATTACHMENT PANEL (built-in bottom sheet) ── */}
-      <Modal visible={showAttachPanel} transparent animationType="slide">
-        <Pressable style={S.attachOverlay} onPress={() => setShowAttachPanel(false)}>
+      {/* ── ATTACHMENT PANEL ────────────────────────────────────────────────── */}
+      {/* ✅ FIX: Use two separate Views instead of nested Pressables.
+          The overlay is a TouchableOpacity that closes on tap.
+          The sheet itself is a plain View — taps on it do NOT bubble to the overlay.
+          This was the root cause: pressing an icon was closing the modal AND
+          opening the picker simultaneously, causing the "picking in progress" error. */}
+      <Modal
+        visible={showAttachPanel}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowAttachPanel(false)}
+      >
+        <View style={S.attachOverlay}>
+          {/* Invisible dismiss area */}
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            activeOpacity={1}
+            onPress={() => setShowAttachPanel(false)}
+          />
+          {/* Sheet — stops propagation naturally since it's a separate View */}
           <View style={[S.attachSheet, { backgroundColor: theme.card, paddingBottom: insets.bottom + 16 }]}>
             <View style={[S.attachHandle, { backgroundColor: theme.border }]} />
             <Text style={[S.attachTitle, { color: theme.subtext }]}>Share</Text>
             <View style={S.attachGrid}>
-              {/* PHOTO */}
-              <Pressable style={S.attachItem} onPress={handlePickImage}>
+              <TouchableOpacity style={S.attachItem} onPress={handlePickImage} activeOpacity={0.7}>
                 <View style={[S.attachIconCircle, { backgroundColor: "#3B82F6" }]}>
                   <Ionicons name="image" size={26} color="#fff" />
                 </View>
                 <Text style={[S.attachLabel, { color: theme.text }]}>Photo</Text>
-              </Pressable>
+              </TouchableOpacity>
 
-              {/* CAMERA */}
-              <Pressable style={S.attachItem} onPress={async () => {
-                setShowAttachPanel(false);
-                const { status } = await ImagePicker.requestCameraPermissionsAsync();
-                if (status !== "granted") { Alert.alert("Permission needed", "Allow camera access."); return; }
-                const result = await ImagePicker.launchCameraAsync({ quality: 0.5, base64: true });
-                if (!result.canceled && result.assets[0]?.base64) {
-                  socketRef.current?.emit("send-image", {
-                    room, sender: username,
-                    imageData: `data:image/jpeg;base64,${result.assets[0].base64}`,
-                  });
-                }
-              }}>
+              <TouchableOpacity style={S.attachItem} onPress={handleCamera} activeOpacity={0.7}>
                 <View style={[S.attachIconCircle, { backgroundColor: "#8B5CF6" }]}>
                   <Ionicons name="camera" size={26} color="#fff" />
                 </View>
                 <Text style={[S.attachLabel, { color: theme.text }]}>Camera</Text>
-              </Pressable>
+              </TouchableOpacity>
 
-              {/* DOCUMENT */}
-              <Pressable style={S.attachItem} onPress={handlePickDocument}>
+              <TouchableOpacity style={S.attachItem} onPress={handlePickDocument} activeOpacity={0.7}>
                 <View style={[S.attachIconCircle, { backgroundColor: "#F59E0B" }]}>
                   <Ionicons name="document-text" size={26} color="#fff" />
                 </View>
                 <Text style={[S.attachLabel, { color: theme.text }]}>Document</Text>
-              </Pressable>
+              </TouchableOpacity>
 
-              {/* POLL */}
-              <Pressable style={S.attachItem} onPress={() => { setShowAttachPanel(false); setShowPollModal(true); }}>
+              <TouchableOpacity style={S.attachItem} onPress={openPoll} activeOpacity={0.7}>
                 <View style={[S.attachIconCircle, { backgroundColor: theme.primary }]}>
                   <Ionicons name="bar-chart" size={26} color="#fff" />
                 </View>
                 <Text style={[S.attachLabel, { color: theme.text }]}>Poll</Text>
-              </Pressable>
+              </TouchableOpacity>
             </View>
           </View>
-        </Pressable>
+        </View>
       </Modal>
 
-      {/* ── POLL CREATION MODAL ── */}
-      <Modal visible={showPollModal} transparent animationType="slide">
+      {/* POLL MODAL */}
+      <Modal
+        visible={showPollModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowPollModal(false)}
+      >
         <View style={S.modalOverlay}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowPollModal(false)} />
           <View style={[S.modalBox, { backgroundColor: theme.card, paddingBottom: insets.bottom + 16 }]}>
             <View style={[S.attachHandle, { backgroundColor: theme.border, alignSelf: "center", marginBottom: 16 }]} />
             <View style={S.modalHeader}>
@@ -538,7 +571,6 @@ export default function CommunityScreen({ theme }: StandardProps) {
                 <Ionicons name="close-circle" size={26} color={theme.subtext} />
               </Pressable>
             </View>
-
             <TextInput
               style={[S.pollInput, { backgroundColor: theme.background, color: theme.text, borderColor: theme.border }]}
               placeholder="Ask a question..."
@@ -546,7 +578,6 @@ export default function CommunityScreen({ theme }: StandardProps) {
               value={pollQuestion}
               onChangeText={setPollQuestion}
             />
-
             {pollOptions.map((opt, idx) => (
               <View key={idx} style={{ flexDirection: "row", alignItems: "center" }}>
                 <TextInput
@@ -554,9 +585,7 @@ export default function CommunityScreen({ theme }: StandardProps) {
                   placeholder={`Option ${idx + 1}`}
                   placeholderTextColor={theme.subtext}
                   value={opt}
-                  onChangeText={(val) => {
-                    const u = [...pollOptions]; u[idx] = val; setPollOptions(u);
-                  }}
+                  onChangeText={(val) => { const u = [...pollOptions]; u[idx] = val; setPollOptions(u); }}
                 />
                 {pollOptions.length > 2 && (
                   <Pressable onPress={() => setPollOptions(pollOptions.filter((_, i) => i !== idx))}>
@@ -565,14 +594,12 @@ export default function CommunityScreen({ theme }: StandardProps) {
                 )}
               </View>
             ))}
-
             {pollOptions.length < 5 && (
               <Pressable onPress={() => setPollOptions([...pollOptions, ""])} style={S.addOptBtn}>
                 <Ionicons name="add-circle-outline" size={18} color={theme.primary} />
                 <Text style={[S.addOptText, { color: theme.primary }]}>Add Option</Text>
               </Pressable>
             )}
-
             <Pressable onPress={handleSendPoll} style={[S.sendPollBtn, { backgroundColor: theme.primary }]}>
               <Text style={S.sendPollText}>Send Poll</Text>
             </Pressable>
@@ -583,39 +610,31 @@ export default function CommunityScreen({ theme }: StandardProps) {
   );
 }
 
-// ─── STYLES ───────────────────────────────────────────────────────────────────
 const S = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1 },
   headerTitle: { fontSize: 16, fontWeight: "700" },
   headerSub:   { fontSize: 12, fontWeight: "600", marginTop: 1 },
-
   center:    { flex: 1, justifyContent: "center", alignItems: "center", paddingTop: 60 },
   emptyText: { textAlign: "center", marginTop: 14, fontSize: 14, lineHeight: 22 },
-
   dateSepRow: { flexDirection: "row", alignItems: "center", marginVertical: 14, paddingHorizontal: 4 },
   dateLine:   { flex: 1, height: 1 },
   datePill:   { paddingHorizontal: 12, paddingVertical: 3, borderRadius: 12, marginHorizontal: 8 },
   dateText:   { fontSize: 11, fontWeight: "600" },
-
   row:      { flexDirection: "row", marginBottom: 10, maxWidth: "82%" },
   rowMe:    { alignSelf: "flex-end",  flexDirection: "row-reverse" },
   rowOther: { alignSelf: "flex-start" },
-
   avatar:     { width: 32, height: 32, borderRadius: 16, justifyContent: "center", alignItems: "center", marginRight: 8, alignSelf: "flex-end" },
   avatarText: { fontSize: 13, fontWeight: "700" },
   bubbleCol:  { flexShrink: 1 },
   senderName: { fontSize: 11, fontWeight: "700", marginBottom: 3, marginLeft: 2 },
-
   bubble:   { paddingHorizontal: 13, paddingVertical: 9, borderRadius: 18 },
   msgText:  { fontSize: 14, lineHeight: 20 },
   timeText: { fontSize: 10, marginTop: 5, alignSelf: "flex-end" },
-
   imgMsg:     { width: 200, height: 200, borderRadius: 12 },
   docRow:     { flexDirection: "row", alignItems: "center", gap: 10, minWidth: 180 },
   docIconBox: { width: 44, height: 44, borderRadius: 10, justifyContent: "center", alignItems: "center" },
   docName:    { fontSize: 13, fontWeight: "600" },
   docSize:    { fontSize: 11, marginTop: 2 },
-
   pollWrap:    { minWidth: 200 },
   pollQ:       { fontSize: 14, fontWeight: "700", marginBottom: 10, lineHeight: 20 },
   pollOpt:     { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, marginBottom: 7, flexDirection: "row", alignItems: "center", overflow: "hidden", position: "relative" },
@@ -623,25 +642,19 @@ const S = StyleSheet.create({
   pollOptText: { flex: 1, fontSize: 13, fontWeight: "500" },
   pollPct:     { fontSize: 12, fontWeight: "700" },
   pollTotal:   { fontSize: 11, marginTop: 6, textAlign: "right" },
-
   emojiPicker: { flexDirection: "row", borderRadius: 28, paddingHorizontal: 8, paddingVertical: 7, marginTop: 5, borderWidth: 1, gap: 2, shadowColor: "#000", shadowOpacity: 0.1, shadowRadius: 8, elevation: 4 },
   emojiBtn:    { padding: 5 },
   emojiChar:   { fontSize: 22 },
-
   reactRow:  { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 5 },
   reactChip: { flexDirection: "row", alignItems: "center", borderRadius: 12, paddingHorizontal: 7, paddingVertical: 3, borderWidth: 1, gap: 3 },
   reactEmoji: { fontSize: 13 },
   reactCount: { fontSize: 11, fontWeight: "700" },
-
   systemBubble: { alignSelf: "center", paddingHorizontal: 14, paddingVertical: 5, borderRadius: 20, marginVertical: 8 },
   systemText:   { fontSize: 12 },
-
   inputBar:  { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 10, paddingTop: 10, borderTopWidth: 1, gap: 8 },
   attachBtn: { paddingBottom: 9 },
   input:     { flex: 1, borderRadius: 22, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, maxHeight: 120 },
   sendBtn:   { width: 40, height: 40, borderRadius: 20, justifyContent: "center", alignItems: "center", marginBottom: 1 },
-
-  // Attachment sheet
   attachOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
   attachSheet:   { borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 12, paddingHorizontal: 20 },
   attachHandle:  { width: 36, height: 4, borderRadius: 2, alignSelf: "center", marginBottom: 8 },
@@ -650,8 +663,6 @@ const S = StyleSheet.create({
   attachItem:    { alignItems: "center", gap: 8 },
   attachIconCircle: { width: 58, height: 58, borderRadius: 29, justifyContent: "center", alignItems: "center" },
   attachLabel:   { fontSize: 12, fontWeight: "500" },
-
-  // Poll modal
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
   modalBox:     { borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 12, paddingHorizontal: 20 },
   modalHeader:  { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
